@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>淡江大學校園互動導覽地圖 - 完整地標與處室版</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet Routing Machine (站內導航) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+  <!-- Font Awesome 圖示庫 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    html, body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #map {
+      height: 100dvh;
+      width: 100vw;
+      z-index: 10;
+      background: #f8fafc;
+    }
+    
+    .leaflet-routing-container {
+      display: none !important;
+    }
+
+    .leaflet-popup-content-wrapper {
+      border-radius: 1rem !important;
+      padding: 4px !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15) !important;
+    }
+    .leaflet-popup-content {
+      margin: 8px 10px !important;
+      line-height: 1.4 !important;
+      max-width: 82vw !important;
+    }
+
+    /* 精緻建築代號圓形標籤 (Building Code Badge) */
+    .code-badge-marker {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9999px;
+      color: #ffffff;
+      font-weight: 800;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.28), 0 2px 4px rgba(0, 0, 0, 0.12);
+      border: 2.5px solid #ffffff;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      letter-spacing: -0.02em;
+    }
+    .code-badge-marker:hover {
+      transform: scale(1.15);
+      z-index: 999 !important;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    /* GPS 脈衝動態光圈 */
+    .user-pulse-marker {
+      position: relative;
+      width: 16px;
+      height: 16px;
+      background: #2563eb;
+      border: 3px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(37,99,235,0.8);
+    }
+    .user-pulse-marker::after {
+      content: '';
+      position: absolute;
+      top: -9px;
+      left: -9px;
+      width: 28px;
+      height: 28px;
+      background-color: rgba(37, 99, 235, 0.4);
+      border-radius: 50%;
+      animation: pulse-ring 2s infinite ease-out;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.6); opacity: 1; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 font-sans select-none">
+
+  <!-- ======================== 左側/頂部多重篩選控制介面 ======================== -->
+  <div class="fixed top-2 sm:top-4 left-2 sm:left-4 right-2 sm:right-auto z-20 flex flex-col gap-1.5 sm:w-88 max-w-full">
+    <!-- 主卡片 -->
+    <div class="bg-white/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl shadow-xl border border-slate-200/90 transition-all max-h-[85vh] overflow-y-auto custom-scroll">
+      
+      <!-- 標題與標籤 -->
+      <div class="flex items-center justify-between mb-1">
+        <h1 class="text-sm sm:text-base font-black text-slate-800 flex items-center gap-1.5">
+          <span class="w-2.5 h-2.5 bg-red-600 rounded-full animate-ping shrink-0"></span>
+          搜尋與篩選
+        </h1>
+        <span id="gps-status-badge" class="text-[10px] sm:text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1 shrink-0">
+          <i class="fa-solid fa-satellite-dish text-[9px] animate-pulse"></i>
+          自動定位中
+        </span>
+      </div>
+      <p class="text-[10px] sm:text-[11px] text-slate-500 mb-2">景點與辦公室共用同一個查詢介面。</p>
+
+      <!-- 關鍵字搜尋 (主要保留區域) -->
+      <div class="relative">
+        <input 
+          type="text" 
+          id="filter-keyword" 
+          placeholder="例如：B402、遠距教學、圖書館、HC308" 
+          class="w-full pl-8 pr-8 py-1.5 sm:py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 focus:bg-white transition-all shadow-inner"
+        />
+        <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2.5 text-slate-400 text-xs"></i>
+        <button id="clear-search" class="hidden absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 p-0.5">
+          <i class="fa-solid fa-circle-xmark text-sm"></i>
+        </button>
+      </div>
+
+      <!-- 摺疊切換按鈕 -->
+      <div class="mt-2 pt-1.5 flex items-center justify-between border-t border-slate-100">
+        <button id="toggle-filters-btn" onclick="toggleAdvancedFilters()" class="text-xs font-bold text-slate-600 hover:text-red-600 flex items-center gap-1.5 py-0.5 transition">
+          <i id="toggle-filter-icon" class="fa-solid fa-sliders text-red-500 text-xs"></i>
+          <span>進階篩選</span>
+          <i id="toggle-arrow-icon" class="fa-solid fa-chevron-down text-[10px] text-slate-400 transition-transform"></i>
+          <span id="active-filter-indicator" class="hidden text-[10px] bg-red-100 text-red-600 px-1.5 py-0.2 rounded-full font-bold ml-1 animate-pulse">
+            ● 已選條件
+          </span>
+        </button>
+
+        <span id="filter-stats" class="text-[10px] sm:text-[11px] text-slate-400 font-semibold">顯示全部項目</span>
+      </div>
+
+      <!-- 可摺疊收納的進階篩選區塊 -->
+      <div id="advanced-filters-panel" class="hidden space-y-2.5 text-xs pt-2.5 mt-1 border-t border-slate-100/80 transition-all">
+        <!-- 篩選列 1: 資料類型 & 景點類別 -->
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">資料類型</label>
+            <select id="filter-data-type" class="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all font-medium">
+              <option value="all">全部類型</option>
+              <option value="office">行政處室/組別</option>
+              <option value="place">校園建築與景點</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">景點類別</label>
+            <select id="filter-place-cat" class="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all font-medium">
+              <option value="all">全部類別</option>
+              <option value="academic">教學學院</option>
+              <option value="admin">行政/圖書</option>
+              <option value="sport">運動場館</option>
+              <option value="life">生活景觀</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 篩選列 2: 辦公室學院 / 單位群組 -->
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">辦公室學院 / 單位群組</label>
+          <select id="filter-group" class="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all font-medium">
+            <option value="all">全部群組</option>
+            <option value="教務處">教務處</option>
+            <option value="學務處">學務處</option>
+            <option value="總務處">總務處</option>
+            <option value="研發處">研發處</option>
+            <option value="國際處">國際處</option>
+            <option value="資訊處">資訊處</option>
+            <option value="體育處">體育處</option>
+            <option value="文學院">文學院</option>
+            <option value="外語學院">外語學院</option>
+            <option value="理學院">理學院</option>
+            <option value="工學院">工學院</option>
+            <option value="商管學院">商管學院</option>
+            <option value="教育學院">教育學院</option>
+            <option value="其它單位">其它單位</option>
+          </select>
+        </div>
+
+        <!-- 篩選列 3: 建築物 -->
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">建築物</label>
+          <select id="filter-building" class="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all font-medium">
+            <option value="all">全部建築物</option>
+            <!-- JavaScript 動態填入選項 -->
+          </select>
+        </div>
+
+        <!-- 條件重設按鈕 -->
+        <div class="pt-1 flex items-center justify-end">
+          <button onclick="resetFilters()" class="text-[11px] text-red-600 hover:text-red-700 font-bold flex items-center gap-1 py-1 px-2.5 rounded-lg hover:bg-red-50 transition">
+            <i class="fa-solid fa-rotate-left"></i> 重設所有條件
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 智慧搜尋連動清單結果 -->
+    <div id="results-container" class="bg-white/95 backdrop-blur-md rounded-2xl shadow-xl max-h-48 sm:max-h-60 overflow-y-auto p-2 border border-slate-200/90 space-y-1.5 text-xs sm:text-sm custom-scroll hidden"></div>
+  </div>
+
+  <!-- 導航資訊浮動卡 -->
+  <div id="nav-banner" class="fixed bottom-4 sm:bottom-auto sm:top-4 left-3 right-3 sm:left-auto sm:right-4 z-20 bg-white/95 backdrop-blur-md p-3.5 sm:p-4 rounded-2xl shadow-2xl border border-blue-200 sm:max-w-xs hidden flex-col gap-2 transition-all">
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-bold text-blue-600 flex items-center gap-1">
+        <i class="fa-solid fa-person-walking text-sm"></i> 校內步行路徑導引
+      </span>
+      <button onclick="cancelNavigation()" class="text-slate-400 hover:text-red-500 text-sm px-1">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div>
+      <div id="nav-target-name" class="text-xs sm:text-sm font-bold text-slate-800 truncate">目的地</div>
+      <div class="flex items-baseline gap-2 mt-0.5">
+        <span id="nav-distance" class="text-base sm:text-lg font-black text-blue-700">計算中...</span>
+        <span id="nav-time" class="text-[11px] sm:text-xs text-slate-500"></span>
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100 flex items-center gap-2">
+      <i class="fa-solid fa-diamond-turn-right text-blue-500 text-xs shrink-0"></i>
+      <span id="nav-step" class="truncate">請沿著校內步道前進</span>
+    </div>
+    <div class="flex gap-2 mt-0.5">
+      <button id="nav-gmaps-btn" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs py-1.5 px-2 rounded-lg font-medium transition text-center flex items-center justify-center gap-1">
+        <i class="fa-brands fa-google text-blue-500"></i> Google Maps
+      </button>
+      <button onclick="cancelNavigation()" class="flex-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs py-1.5 px-2 rounded-lg font-medium transition">
+        結束導航
+      </button>
+    </div>
+  </div>
+
+  <!-- GPS 定位手動重新置中按鈕 -->
+  <div class="fixed bottom-6 right-3 sm:right-6 z-20">
+    <button 
+      id="locate-btn" 
+      onclick="recenterUser()" 
+      class="bg-blue-600 hover:bg-blue-700 text-white w-11 h-11 sm:w-12 sm:h-12 rounded-2xl shadow-lg shadow-blue-500/30 flex items-center justify-center transition-all active:scale-90" 
+      title="回到我的目前位置"
+    >
+      <i class="fa-solid fa-location-crosshairs text-base sm:text-lg"></i>
+    </button>
+  </div>
+
+  <!-- Toast 訊息提示器 -->
+  <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-30 bg-slate-900/90 backdrop-blur text-white text-xs px-3.5 py-2 rounded-full shadow-2xl transition-all duration-300 opacity-0 pointer-events-none transform -translate-y-2 flex items-center gap-2">
+    <i id="toast-icon" class="fa-solid fa-circle-info text-blue-400"></i>
+    <span id="toast-msg">通知訊息</span>
+  </div>
+
+  <!-- Leaflet 地圖容器 -->
+  <div id="map"></div>
+
+  <script>
+    function showToast(msg, icon = 'fa-circle-info', color = 'text-blue-400') {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toast-msg');
+      const toastIcon = document.getElementById('toast-icon');
+      toastMsg.innerText = msg;
+      toastIcon.className = `fa-solid ${icon} ${color}`;
+      toast.classList.remove('opacity-0', 'pointer-events-none', '-translate-y-2');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none', '-translate-y-2');
+      }, 3000);
+    }
+
+    // 1. 校園地標資料集 (包含新增之 V 視聽教育館、文錙音樂廳、I 覺生綜合大樓)
+    const campusPlaces = [
+      { id: "A", name: "行政大樓", lat: 25.174879496685257, lng: 121.44905729987109, cat: "admin", color: "#059669", desc: "學校核心行政大樓（教務處、研發處等）" },
+      { id: "H", name: "宮燈教室", lat: 25.17448723069087, lng: 121.44939660812109, cat: "academic", color: "#dc2626", desc: "特色中國傳統式瓦舍教室區" },
+      { id: "V", name: "視聽教育館", lat: 25.17499312092134, lng: 121.4494349008392, cat: "academic", color: "#dc2626", desc: "視聽教育教學與語言視聽研習館" },
+      { id: "I", name: "覺生綜合大樓", lat: 25.174542326030323, lng: 121.45097529475487, cat: "admin", color: "#0284c7", desc: "遠距教學中心 (I101)、品保處與校務研究中心 (I801)、覺生國際會議廳 (I1001)" },
+      { id: "TENNIS", name: "網球場", lat: 25.175146690188537, lng: 121.44980790901334, cat: "sport", color: "#16a34a", desc: "校內網球活動場地" },
+      { id: "POST", name: "淡江郵局", lat: 25.17464421134901, lng: 121.45027461328878, cat: "life", color: "#16a34a", desc: "淡江校內郵務與儲匯服務" },
+      { id: "R", name: "活動中心", lat: 25.17478743024776, lng: 121.45037385501142, cat: "life", color: "#ea580c", desc: "學生自治會、社團辦公室與表演廳" },
+      { id: "SQUARE", name: "蛋捲廣場", lat: 25.17553993356438, lng: 121.45063402925842, cat: "life", color: "#8b5cf6", desc: "淡江地標五虎碑所在聚會廣場" },
+      { id: "U", name: "覺生紀念圖書館", lat: 25.17475101868242, lng: 121.45105513602745, cat: "admin", color: "#0284c7", desc: "總圖書館，提供書籍借閱與自修室" },
+      { id: "FL", name: "外國語文大樓", lat: 25.17488210027984, lng: 121.45164253975626, cat: "academic", color: "#dc2626", desc: "外語學院系所辦公室（英文、法文、德文、日文、俄文、西文系）" },
+      { id: "AC", name: "文錙藝術中心", lat: 25.17504959322785, lng: 121.45222189698671, cat: "life", color: "#9333ea", desc: "藝術文化展示與書法典藏展覽廳" },
+      { id: "MUSIC", name: "文錙音樂廳", lat: 25.17561479953073, lng: 121.4511518404264, cat: "life", color: "#9333ea", desc: "音樂演奏、藝文表演與小型研討會展演廳" },
+      { id: "FOOD", name: "美食廣場", lat: 25.17500668977156, lng: 121.4521207165776, cat: "life", color: "#d97706", desc: "校內餐飲與學生用餐生活商場" },
+      { id: "Z123", name: "松濤1、2、3館", lat: 25.17501075430506, lng: 121.45261081725785, cat: "life", color: "#e11d48", desc: "學生宿舍區、住宿輔導組（松濤二館二樓大廳 Z200）" },
+      { id: "Z45", name: "松濤4、5館", lat: 25.17531418306515, lng: 121.45250621112069, cat: "life", color: "#e11d48", desc: "學生宿舍區" },
+      { id: "Q", name: "驚聲紀念大樓", lat: 25.17549138511537, lng: 121.45133140359606, cat: "academic", color: "#dc2626", desc: "國際處、外交系、全球政經系辦公室" },
+      { id: "E", name: "工學大樓", lat: 25.175972014036386, lng: 121.4518329766833, cat: "academic", color: "#dc2626", desc: "工學院各系所辦公室（土木、水資源、機械、電機、資工、航太、化材）及資訊處" },
+      { id: "G", name: "工學館", lat: 25.176222037416437, lng: 121.45101490302378, cat: "academic", color: "#dc2626", desc: "工程專業實習工廠、安全辦公室 (G101)、財務處 (G401)" },
+      { id: "K", name: "建築館", lat: 25.17610000000000, lng: 121.45150000000000, cat: "academic", color: "#dc2626", desc: "建築學系系辦公室 (K101) 與評圖展演空間" },
+      { id: "SWAN", name: "黑天鵝展示廳", lat: 25.176342748545554, lng: 121.45056420144378, cat: "life", color: "#4f46e5", desc: "校園文藝展覽、成果發表與海報特展展廳" },
+      { id: "M", name: "海事博物館", lat: 25.176231747056615, lng: 121.45043018144673, cat: "life", color: "#0891b2", desc: "船型特色博物館、衛生保健組（下層靠近福園）" },
+      { id: "ED", name: "教育館", lat: 25.17583365135925, lng: 121.45271542347635, cat: "academic", color: "#dc2626", desc: "教育學院、教科系、教育組、特教中心 (ED603)" },
+      { id: "COURT5", name: "五虎崗球場", lat: 25.17557149006987, lng: 121.45374270944231, cat: "sport", color: "#16a34a", desc: "排球、籃球戶外綜合球場" },
+      { id: "HW", name: "會文館", lat: 25.175714707884946, lng: 121.4495852855837, cat: "academic", color: "#dc2626", desc: "總務處辦公室（事務組、營繕組、資產組 F103）" },
+      { id: "L", name: "文學館", lat: 25.176230325112066, lng: 121.44938680218506, cat: "academic", color: "#dc2626", desc: "中文系 (L506)、歷史系 (L524)、資圖系 (L405)" },
+      { id: "B", name: "商館 / 商管大樓", lat: 25.1765822988849, lng: 121.4500734475651, cat: "academic", color: "#dc2626", desc: "學務處（生輔組、諮商中心）、商管學院各系辦公室（B8~B11）" },
+      { id: "BUS27", name: "紅27公車站", lat: 25.176575185036917, lng: 121.44828350788619, cat: "life", color: "#0284c7", desc: "前往淡水捷運站之主要公車發車乘車處" },
+      { id: "SG", name: "紹謨紀念體育館", lat: 25.176303147356244, lng: 121.44858482167012, cat: "sport", color: "#16a34a", desc: "室內羽球/籃球場、課外活動輔導組 (SG211)" },
+      { id: "BUS28", name: "紅28公車站", lat: 25.174715780941035, lng: 121.44867511038852, cat: "life", color: "#0284c7", desc: "往返淡水捷運站校內公車停靠站點" },
+      { id: "O", name: "傳播館 / 大傳臨辦", lat: 25.175609258001995, lng: 121.44901102352833, cat: "academic", color: "#dc2626", desc: "大傳系臨辦 (O302)、傳播學院影音棚" },
+      { id: "C", name: "鍾靈化學館", lat: 25.175216949445087, lng: 121.44878854583827, cat: "academic", color: "#dc2626", desc: "化學系系辦公室 (C306)" },
+      { id: "S", name: "騮先紀念科學館", lat: 25.17549126830538, lng: 121.44818655683316, cat: "academic", color: "#dc2626", desc: "數學系 (S629)、物理系 (S323)" },
+      { id: "HC", name: "守謙國際會議中心", lat: 25.17474048214446, lng: 121.44787456316837, cat: "admin", color: "#0284c7", desc: "人工智慧學系 (HC303)、事務整備組 (HC308)、校友總會會館 (HC301)" },
+      { id: "N", name: "紹謨紀念游泳館", lat: 25.174611747711207, lng: 121.44721264698532, cat: "sport", color: "#16a34a", desc: "標準室內溫水游泳池" },
+      { id: "BBALL", name: "籃球場", lat: 25.17380672529315, lng: 121.44683142866, cat: "sport", color: "#16a34a", desc: "戶外籃球運動場" },
+      { id: "TRACK", name: "操場", lat: 25.173549254309364, lng: 121.44595519570949, cat: "sport", color: "#16a34a", desc: "標準田徑跑道與運動場" },
+      { id: "STAIRS", name: "克難坡", lat: 25.173098467904936, lng: 121.44741584416491, cat: "life", color: "#d97706", desc: "淡江知名 132 階好漢坡，登高精神象徵" },
+      { id: "JS_SQUARE", name: "驚聲廣場", lat: 25.173818997388533, lng: 121.44742518952371, cat: "life", color: "#8b5cf6", desc: "校園綠意休憩廣場" }
+    ];
+
+    // 2. 處室與系所資料庫 (新增事務整備組、校友總會會館、覺生綜合大樓各單位)
+    const campusOffices = [
+      // 守謙國際會議中心新增
+      { name: "事務整備組辦公室 (場地/設備管理/借用)", group: "總務處", building: "守謙國際會議中心", room: "HC308", targetId: "HC" },
+      { name: "淡江大學校友總會會館", group: "其它單位", building: "守謙國際會議中心", room: "HC301", targetId: "HC" },
+
+      // 覺生綜合大樓新增
+      { name: "遠距教學發展中心 (數位教材/iClass/遠距教室)", group: "教務處", building: "覺生綜合大樓", room: "I101", targetId: "I" },
+      { name: "品質保證稽核處 及 校務研究中心", group: "其它單位", building: "覺生綜合大樓", room: "I801", targetId: "I" },
+      { name: "覺生國際會議廳", group: "其它單位", building: "覺生綜合大樓", room: "I1001", targetId: "I" },
+
+      // 學務處
+      { name: "生輔組 (就貸/兵役/獎學金)", group: "學務處", building: "商館", room: "B402", targetId: "B" },
+      { name: "生輔組 (學雜費減免/弱勢助學)", group: "學務處", building: "商館", room: "B421", targetId: "B" },
+      { name: "生輔組 (請假/校安交通)", group: "學務處", building: "商館", room: "B401", targetId: "B" },
+      { name: "學務處 聯合服務櫃台", group: "學務處", building: "商館", room: "B418", targetId: "B" },
+      { name: "課外活動輔導組 (課外組)", group: "學務處", building: "紹謨紀念體育館", room: "SG211", targetId: "SG" },
+      { name: "衛生保健組 (衛保組)", group: "學務處", building: "海事博物館下層(靠近福園)", room: "M館下層", targetId: "M" },
+      { name: "住宿輔導組 (住輔組)", group: "學務處", building: "松濤館二館", room: "二樓大廳 (Z200)", targetId: "Z123" },
+      { name: "諮商職涯暨學習發展輔導中心", group: "學務處", building: "商館", room: "B402 / I401", targetId: "B" },
+      { name: "原住民族學生資源中心", group: "學務處", building: "商館", room: "B423", targetId: "B" },
+
+      // 核心行政單位
+      { name: "教務處 (註冊組/課務組/招生組/通識中心)", group: "教務處", building: "行政大樓", room: "A212", targetId: "A" },
+      { name: "總務處 (事務組/營繕組/資產組)", group: "總務處", building: "會文館", room: "F103", targetId: "HW" },
+      { name: "安全辦公室", group: "總務處", building: "工學館", room: "G101", targetId: "G" },
+      { name: "總務處 出納組", group: "總務處", building: "商館", room: "B304", targetId: "B" },
+      { name: "財務處", group: "其它單位", building: "工學館", room: "G401", targetId: "G" },
+      { name: "資訊處 (服務台)", group: "資訊處", building: "工學大樓", room: "E214", targetId: "E" },
+      { name: "國際處 (境內外生服務)", group: "國際處", building: "驚聲紀念大樓", room: "T1001", targetId: "Q" },
+      { name: "研究發展處 (研發處)", group: "研發處", building: "行政大樓", room: "A214", targetId: "A" },
+
+      // 文、外語、教育學院
+      { name: "中國文學學系 (中文系)", group: "文學院", building: "文學館", room: "L506", targetId: "L" },
+      { name: "歷史學系 (歷史系)", group: "文學院", building: "文學館", room: "L524", targetId: "L" },
+      { name: "資訊與圖書館學系 (資圖系)", group: "文學院", building: "文學館", room: "L405", targetId: "L" },
+      { name: "大眾傳播學系 (大傳系)", group: "文學院", building: "傳播館 (文館旁臨辦)", room: "O302", targetId: "O" },
+      { name: "英文學系 (英文系)", group: "外語學院", building: "外國語文大樓", room: "FL507", targetId: "FL" },
+      { name: "法國語文學系 (法文系)", group: "外語學院", building: "外國語文大樓", room: "FL407", targetId: "FL" },
+      { name: "德國語文學系 (德文系)", group: "外語學院", building: "外國語文大樓", room: "FL408", targetId: "FL" },
+      { name: "日本語文學系 (日文系)", group: "外語學院", building: "外國語文大樓", room: "FL506", targetId: "FL" },
+      { name: "俄國語文學系 (俄文系)", group: "外語學院", building: "外國語文大樓", room: "FL406", targetId: "FL" },
+      { name: "西班牙語文學系 (西文系)", group: "外語學院", building: "外國語文大樓", room: "FL508", targetId: "FL" },
+      { name: "外交與國際關係學系 / 全球政經系", group: "其它單位", building: "驚聲紀念大樓", room: "T1004", targetId: "Q" },
+      { name: "教育科技學系 / 教育組 / 特教中心", group: "教育學院", building: "教育館", room: "ED603", targetId: "ED" },
+
+      // 理、工、AI學院
+      { name: "數學學系 (數學系)", group: "理學院", building: "騮先紀念科學館", room: "S629", targetId: "S" },
+      { name: "物理學系 (物理系)", group: "理學院", building: "騮先紀念科學館", room: "S323", targetId: "S" },
+      { name: "化學學系 (化學系)", group: "理學院", building: "鍾靈化學館", room: "C306", targetId: "C" },
+      { name: "建築學系 (建築系)", group: "工學院", building: "建築館", room: "K101", targetId: "K" },
+      { name: "土木工程學系 (土木系)", group: "工學院", building: "工學大樓", room: "E711", targetId: "E" },
+      { name: "水資源及環境工程學系 (水資源系)", group: "工學院", building: "工學大樓", room: "E610", targetId: "E" },
+      { name: "機械與機電工程學系 (機械系)", group: "工學院", building: "工學大樓", room: "E413", targetId: "E" },
+      { name: "電機工程學系 (電機系)", group: "工學院", building: "工學大樓", room: "E815", targetId: "E" },
+      { name: "資訊工程學系 (資工系)", group: "工學院", building: "工學大樓", room: "E305", targetId: "E" },
+      { name: "航空太空工程學系 (航太系)", group: "工學院", building: "工學大樓", room: "E611", targetId: "E" },
+      { name: "化學工程與材料工程學系 (化材系)", group: "工學院", building: "工學大樓", room: "E514", targetId: "E" },
+      { name: "人工智慧學系 (AI系)", group: "工學院", building: "守謙國際會議中心", room: "HC303", targetId: "HC" },
+
+      // 商管學院
+      { name: "商管學院辦公室 (院辦)", group: "商管學院", building: "商館", room: "B1001", targetId: "B" },
+      { name: "國際企業學系 (國企系)", group: "商管學院", building: "商館", room: "B1012", targetId: "B" },
+      { name: "財務金融學系 (金管系/財金系)", group: "商管學院", building: "商館", room: "B1104 / B1102", targetId: "B" },
+      { name: "會計學系 (會計系)", group: "商管學院", building: "商館", room: "B1003", targetId: "B" },
+      { name: "產業經濟學系 (產經系)", group: "商管學院", building: "商館", room: "B1111", targetId: "B" },
+      { name: "經濟學系 (經濟系)", group: "商管學院", building: "商館", room: "B1109", targetId: "B" },
+      { name: "企業管理學系 (企管系)", group: "商管學院", building: "商館", room: "B912", targetId: "B" },
+      { name: "風險管理與保險學系 (保險系)", group: "商管學院", building: "商館", room: "B1107", targetId: "B" },
+      { name: "資訊管理學系 (資管系)", group: "商管學院", building: "商館", room: "B927", targetId: "B" },
+      { name: "公共行政學系 (公行系)", group: "商管學院", building: "商館", room: "B811", targetId: "B" },
+      { name: "管理科學學系 (管科學系)", group: "商管學院", building: "商館", room: "B1014", targetId: "B" },
+      { name: "統計學系 (統計系)", group: "商管學院", building: "商館", room: "B1113", targetId: "B" }
+    ];
+
+    // 3. 地圖初始化
+    const isMobile = window.innerWidth < 640;
+    const campusCenter = [25.1752, 121.4503];
+    const map = L.map('map', { 
+      zoomControl: false,
+      maxBounds: [
+        [25.1680, 121.4390],
+        [25.1820, 121.4620]
+      ],
+      maxBoundsViscosity: 0.8
+    }).setView(campusCenter, isMobile ? 16 : 17);
+
+    // 國土測繪中心 EMAP8（純圖無字版）
+    const emap8 = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP8/default/GoogleMapsCompatible/{z}/{y}/{x}', {
+      maxZoom: 20,
+      attribution: '&copy; <a href="https://maps.nlsc.gov.tw/" target="_blank">國土測繪圖資服務雲</a>'
+    }).addTo(map);
+
+    // 備用 OpenStreetMap
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    });
+
+    L.control.layers({
+      "國土測繪無字版 (推薦)": emap8,
+      "OpenStreetMap 標準版": osm
+    }, null, { position: 'topright' }).addTo(map);
+
+    L.control.zoom({ position: 'topright' }).addTo(map);
+
+    // 4. 精緻英文代號標籤外觀建置
+    const markersLayer = L.layerGroup().addTo(map);
+    const markersById = {};
+
+    function createCodeBadgeIcon(place) {
+      const codeLen = place.id.length;
+      let badgeWidth = 32;
+      let badgeHeight = 32;
+      let fontSize = '13px';
+
+      if (codeLen === 1) {
+        badgeWidth = 30;
+        badgeHeight = 30;
+        fontSize = '14px';
+      } else if (codeLen === 2) {
+        badgeWidth = 34;
+        badgeHeight = 34;
+        fontSize = '12px';
+      } else if (codeLen >= 3) {
+        badgeWidth = 46;
+        badgeHeight = 30;
+        fontSize = '10px';
+      }
+
+      return L.divIcon({
+        className: '',
+        html: `
+          <div class="code-badge-marker" style="
+            background-color: ${place.color}; 
+            width: ${badgeWidth}px; 
+            height: ${badgeHeight}px; 
+            font-size: ${fontSize};
+          ">
+            ${place.id}
+          </div>
+        `,
+        iconSize: [badgeWidth, badgeHeight],
+        iconAnchor: [badgeWidth / 2, badgeHeight / 2],
+        popupAnchor: [0, -(badgeHeight / 2 + 4)]
+      });
+    }
+
+    function getPopupHtml(place, highlightedOffice = null) {
+      const officesInPlace = campusOffices.filter(o => o.targetId === place.id);
+      
+      let highlightHtml = '';
+      if (highlightedOffice) {
+        highlightHtml = `
+          <div class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-xl text-xs">
+            <div class="font-bold text-amber-900 flex items-center gap-1">
+              <i class="fa-solid fa-crosshairs text-amber-600"></i>
+              查詢目標：${highlightedOffice.name}
+            </div>
+            <div class="text-slate-700 mt-0.5">位置：<span class="font-bold text-red-600 font-mono">${highlightedOffice.room}</span> (${highlightedOffice.group})</div>
+          </div>
+        `;
+      }
+
+      let officesListHtml = '';
+      if (officesInPlace.length > 0) {
+        officesListHtml = `
+          <div class="mt-2 pt-1.5 border-t border-slate-100">
+            <details class="group" open>
+              <summary class="text-xs font-bold text-slate-500 cursor-pointer flex items-center justify-between py-1 select-none">
+                <span>🏢 進駐處室 / 系所 (${officesInPlace.length})</span>
+                <i class="fa-solid fa-chevron-down text-[10px] transition-transform group-open:rotate-180"></i>
+              </summary>
+              <div class="mt-1 space-y-1 max-h-36 overflow-y-auto custom-scroll pr-1">
+                ${officesInPlace.map(o => `
+                  <div class="flex justify-between items-center text-xs py-0.5 px-1 rounded hover:bg-slate-50">
+                    <span class="text-slate-700 truncate pr-1">${o.name}</span>
+                    <span class="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-1.5 py-0.2 rounded shrink-0">${o.room}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </details>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="min-w-[200px] max-w-[270px]">
+          ${highlightHtml}
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="text-[11px] px-1.5 py-0.2 rounded-full font-extrabold text-white shadow-sm shrink-0" style="background-color:${place.color};">
+              ${place.id}
+            </span>
+            <h3 class="font-bold text-slate-900 text-sm truncate">${place.name}</h3>
+          </div>
+          <p class="text-[11px] sm:text-xs text-slate-600 mb-1.5 leading-relaxed">${place.desc}</p>
+          ${officesListHtml}
+          <button onclick="startNavigation(${place.lat}, ${place.lng}, '${place.name}')" 
+                  class="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-2 rounded-xl font-bold transition flex items-center justify-center gap-1 shadow-sm active:scale-95">
+            <i class="fa-solid fa-person-walking text-xs"></i> 步行前往此處
+          </button>
+        </div>
+      `;
+    }
+
+    function initMarkers() {
+      campusPlaces.forEach(place => {
+        const marker = L.marker([place.lat, place.lng], {
+          icon: createCodeBadgeIcon(place)
+        });
+        marker.bindPopup(getPopupHtml(place), {
+          autoPanPadding: [20, 80]
+        });
+        markersLayer.addLayer(marker);
+        markersById[place.id] = marker;
+      });
+    }
+    initMarkers();
+
+    // 動態填入建築下拉選單
+    function populateBuildingSelect() {
+      const select = document.getElementById('filter-building');
+      campusPlaces.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.innerText = `${p.id} - ${p.name}`;
+        select.appendChild(opt);
+      });
+    }
+    populateBuildingSelect();
+
+    // 5. 折疊與多重篩選控制器 (Collapsible Multi-filter Engine)
+    const keywordInput = document.getElementById('filter-keyword');
+    const dataTypeSelect = document.getElementById('filter-data-type');
+    const placeCatSelect = document.getElementById('filter-place-cat');
+    const groupSelect = document.getElementById('filter-group');
+    const buildingSelect = document.getElementById('filter-building');
+    const clearSearchBtn = document.getElementById('clear-search');
+    const resultsContainer = document.getElementById('results-container');
+    const filterStats = document.getElementById('filter-stats');
+    const advPanel = document.getElementById('advanced-filters-panel');
+    const arrowIcon = document.getElementById('toggle-arrow-icon');
+    const activeIndicator = document.getElementById('active-filter-indicator');
+
+    function toggleAdvancedFilters() {
+      const isHidden = advPanel.classList.contains('hidden');
+      if (isHidden) {
+        advPanel.classList.remove('hidden');
+        arrowIcon.classList.add('rotate-180');
+      } else {
+        advPanel.classList.add('hidden');
+        arrowIcon.classList.remove('rotate-180');
+      }
+    }
+
+    function applyFilters() {
+      const kw = keywordInput.value.trim().toLowerCase();
+      const dataType = dataTypeSelect.value;
+      const placeCat = placeCatSelect.value;
+      const group = groupSelect.value;
+      const buildingId = buildingSelect.value;
+
+      if (kw) {
+        clearSearchBtn.classList.remove('hidden');
+      } else {
+        clearSearchBtn.classList.add('hidden');
+      }
+
+      let activeFilterCount = 0;
+      if (dataType !== 'all') activeFilterCount++;
+      if (placeCat !== 'all') activeFilterCount++;
+      if (group !== 'all') activeFilterCount++;
+      if (buildingId !== 'all') activeFilterCount++;
+
+      if (activeFilterCount > 0) {
+        activeIndicator.classList.remove('hidden');
+        activeIndicator.innerText = `● 已選 ${activeFilterCount} 項`;
+      } else {
+        activeIndicator.classList.add('hidden');
+      }
+
+      // 1. 篩選處室
+      let matchedOffices = campusOffices.filter(o => {
+        if (dataType === 'place') return false;
+        if (group !== 'all' && o.group !== group) return false;
+        if (buildingId !== 'all' && o.targetId !== buildingId) return false;
+        if (kw) {
+          const matchKw = o.name.toLowerCase().includes(kw) || 
+                          o.room.toLowerCase().includes(kw) || 
+                          o.group.toLowerCase().includes(kw) || 
+                          o.building.toLowerCase().includes(kw);
+          if (!matchKw) return false;
+        }
+        return true;
+      });
+
+      // 2. 篩選地標建築
+      let matchedPlaces = campusPlaces.filter(p => {
+        if (dataType === 'office') return false;
+        if (placeCat !== 'all' && p.cat !== placeCat) return false;
+        if (buildingId !== 'all' && p.id !== buildingId) return false;
+        if (kw) {
+          const matchKw = p.name.toLowerCase().includes(kw) || 
+                          p.id.toLowerCase().includes(kw) || 
+                          p.desc.toLowerCase().includes(kw);
+          if (!matchKw) return false;
+        }
+        return true;
+      });
+
+      // 地圖標記連動顯示
+      const activePlaceIds = new Set([
+        ...matchedPlaces.map(p => p.id),
+        ...matchedOffices.map(o => o.targetId)
+      ]);
+
+      markersLayer.clearLayers();
+      campusPlaces.forEach(place => {
+        if (activePlaceIds.has(place.id)) {
+          markersLayer.addLayer(markersById[place.id]);
+        }
+      });
+
+      renderResultsList(matchedOffices, matchedPlaces);
+    }
+
+    function renderResultsList(offices, places) {
+      const isFiltered = keywordInput.value.trim() !== '' || 
+                         dataTypeSelect.value !== 'all' || 
+                         placeCatSelect.value !== 'all' || 
+                         groupSelect.value !== 'all' || 
+                         buildingSelect.value !== 'all';
+
+      if (!isFiltered) {
+        resultsContainer.classList.add('hidden');
+        filterStats.innerText = "顯示全部項目";
+        return;
+      }
+
+      resultsContainer.classList.remove('hidden');
+      resultsContainer.innerHTML = '';
+      const totalCount = offices.length + places.length;
+      filterStats.innerText = `符合：${totalCount} 項`;
+
+      if (totalCount === 0) {
+        resultsContainer.innerHTML = `<div class="p-3 text-center text-xs text-slate-400">找不到相符的項目，請嘗試放寬條件</div>`;
+        return;
+      }
+
+      if (offices.length > 0) {
+        const title = document.createElement('div');
+        title.className = "text-[11px] font-bold text-slate-400 px-2 pt-1";
+        title.innerText = `行政處室 / 學術系所 (${offices.length})`;
+        resultsContainer.appendChild(title);
+
+        offices.forEach(office => {
+          const item = document.createElement('div');
+          item.className = "p-2 hover:bg-blue-50 rounded-xl cursor-pointer flex flex-col transition border border-transparent hover:border-blue-100";
+          item.innerHTML = `
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-800 text-xs">${office.name}</span>
+              <span class="text-xs font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-mono">${office.room}</span>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-0.5 flex items-center justify-between">
+              <span><i class="fa-solid fa-location-dot text-slate-400 text-[10px]"></i> 位於：${office.building}</span>
+              <span class="bg-slate-100 text-slate-600 px-1.5 rounded text-[10px]">${office.group}</span>
+            </div>
+          `;
+          item.onclick = () => {
+            const place = campusPlaces.find(p => p.id === office.targetId);
+            if (place) {
+              const marker = markersById[place.id];
+              map.flyTo([place.lat, place.lng], 18, { duration: 1 });
+              marker.setPopupContent(getPopupHtml(place, office));
+              setTimeout(() => marker.openPopup(), 600);
+              resultsContainer.classList.add('hidden');
+            }
+          };
+          resultsContainer.appendChild(item);
+        });
+      }
+
+      if (places.length > 0) {
+        const title = document.createElement('div');
+        title.className = "text-[11px] font-bold text-slate-400 px-2 pt-2";
+        title.innerText = `校園建築與景點 (${places.length})`;
+        resultsContainer.appendChild(title);
+
+        places.forEach(place => {
+          const item = document.createElement('div');
+          item.className = "p-2 hover:bg-slate-100 rounded-xl cursor-pointer flex items-center justify-between transition";
+          item.innerHTML = `
+            <div class="flex items-center gap-2">
+              <span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black text-white shrink-0" style="background-color:${place.color};">${place.id}</span>
+              <span class="font-bold text-slate-800 text-xs">${place.name}</span>
+            </div>
+            <span class="text-[10px] text-slate-400 font-mono">前往地號</span>
+          `;
+          item.onclick = () => {
+            const marker = markersById[place.id];
+            map.flyTo([place.lat, place.lng], 18, { duration: 1 });
+            marker.setPopupContent(getPopupHtml(place));
+            setTimeout(() => marker.openPopup(), 600);
+            resultsContainer.classList.add('hidden');
+          };
+          resultsContainer.appendChild(item);
+        });
+      }
+    }
+
+    // 監聽所有篩選變更
+    [keywordInput, dataTypeSelect, placeCatSelect, groupSelect, buildingSelect].forEach(elem => {
+      elem.addEventListener('input', applyFilters);
+      elem.addEventListener('change', applyFilters);
+    });
+
+    clearSearchBtn.addEventListener('click', () => {
+      keywordInput.value = '';
+      applyFilters();
+    });
+
+    function resetFilters() {
+      keywordInput.value = '';
+      dataTypeSelect.value = 'all';
+      placeCatSelect.value = 'all';
+      groupSelect.value = 'all';
+      buildingSelect.value = 'all';
+      applyFilters();
+      showToast("已重設所有搜尋與篩選條件", "fa-rotate-left", "text-blue-400");
+    }
+
+    // 拖曳地圖時自動收起面板
+    map.on('dragstart', () => {
+      if (!advPanel.classList.contains('hidden')) {
+        advPanel.classList.add('hidden');
+        arrowIcon.classList.remove('rotate-180');
+      }
+    });
+
+    // 6. 自動 GPS 即時定位與追蹤
+    let userMarker = null;
+    let userAccuracyCircle = null;
+    let userLatLng = null;
+    let hasCenteredFirstTime = false;
+    let watchId = null;
+
+    function startAutoLocationTracking() {
+      const statusBadge = document.getElementById('gps-status-badge');
+
+      if (!navigator.geolocation) {
+        statusBadge.className = "text-[10px] sm:text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-bold";
+        statusBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> 不支援 GPS';
+        showToast("裝置不支援定位功能，已預設顯示淡江校園", "fa-triangle-exclamation", "text-amber-400");
+        return;
+      }
+
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const accuracy = pos.coords.accuracy;
+          userLatLng = [lat, lng];
+
+          if (!userMarker) {
+            const userIcon = L.divIcon({
+              className: 'user-pulse-marker',
+              iconSize: [16, 16],
+              iconAnchor: [8, 8]
+            });
+            userMarker = L.marker(userLatLng, { icon: userIcon, zIndexOffset: 1000 }).addTo(map);
+            userMarker.bindTooltip("我的目前位置", { permanent: false, direction: 'top' });
+
+            userAccuracyCircle = L.circle(userLatLng, {
+              radius: accuracy,
+              color: '#3b82f6',
+              weight: 1,
+              fillColor: '#60a5fa',
+              fillOpacity: 0.15
+            }).addTo(map);
+          } else {
+            userMarker.setLatLng(userLatLng);
+            if (userAccuracyCircle) {
+              userAccuracyCircle.setLatLng(userLatLng);
+              userAccuracyCircle.setRadius(accuracy);
+            }
+          }
+
+          if (!hasCenteredFirstTime) {
+            hasCenteredFirstTime = true;
+            map.flyTo(userLatLng, 18, { duration: 1.2 });
+            showToast("已自動為您定位並置中", "fa-circle-check", "text-emerald-400");
+          }
+
+          statusBadge.className = "text-[10px] sm:text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1";
+          statusBadge.innerHTML = '<i class="fa-solid fa-location-dot"></i> GPS 已連線';
+        },
+        (err) => {
+          statusBadge.className = "text-[10px] sm:text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold flex items-center gap-1";
+          statusBadge.innerHTML = '<i class="fa-solid fa-location-crosshairs"></i> 點擊手動定位';
+          
+          if (!hasCenteredFirstTime) {
+            hasCenteredFirstTime = true;
+            showToast("若需即時定位，請允許瀏覽器位置存取權限", "fa-location-arrow", "text-blue-400");
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000
+        }
+      );
+    }
+
+    function recenterUser() {
+      const btn = document.getElementById('locate-btn');
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-base"></i>';
+
+      if (userLatLng) {
+        map.flyTo(userLatLng, 18, { duration: 1 });
+        showToast("已置中至目前位置", "fa-crosshairs", "text-blue-400");
+        setTimeout(() => {
+          btn.innerHTML = '<i class="fa-solid fa-location-crosshairs text-base"></i>';
+        }, 600);
+      } else {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            userLatLng = [pos.coords.latitude, pos.coords.longitude];
+            if (!userMarker) {
+              const userIcon = L.divIcon({
+                className: 'user-pulse-marker',
+                iconSize: [16, 16],
+                iconAnchor: [8, 8]
+              });
+              userMarker = L.marker(userLatLng, { icon: userIcon, zIndexOffset: 1000 }).addTo(map);
+            } else {
+              userMarker.setLatLng(userLatLng);
+            }
+            map.flyTo(userLatLng, 18, { duration: 1.2 });
+            showToast("已成功定位", "fa-circle-check", "text-emerald-400");
+            btn.innerHTML = '<i class="fa-solid fa-location-crosshairs text-base"></i>';
+          },
+          (err) => {
+            showToast("無法取得定位，請檢查手機 GPS 是否已開啟", "fa-triangle-exclamation", "text-red-400");
+            btn.innerHTML = '<i class="fa-solid fa-location-crosshairs text-base"></i>';
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      }
+    }
+
+    // 7. 站內步行導航
+    let routingControl = null;
+
+    function startNavigation(destLat, destLng, destName) {
+      map.closePopup();
+
+      if (!userLatLng) {
+        showToast("正在確認起點座標...", "fa-location-arrow", "text-blue-400");
+        recenterUser();
+        return;
+      }
+
+      runRouting(destLat, destLng, destName);
+    }
+
+    function runRouting(destLat, destLng, destName) {
+      if (routingControl) {
+        map.removeControl(routingControl);
+      }
+
+      const navBanner = document.getElementById('nav-banner');
+      navBanner.classList.remove('hidden');
+      navBanner.classList.add('flex');
+      document.getElementById('nav-target-name').innerText = `目的地：${destName}`;
+      document.getElementById('nav-distance').innerText = "規劃中...";
+      document.getElementById('nav-time').innerText = "";
+      
+      const gmapsBtn = document.getElementById('nav-gmaps-btn');
+      gmapsBtn.onclick = () => {
+        window.open(`https://www.google.com/maps/dir/?api=1&origin=${userLatLng[0]},${userLatLng[1]}&destination=${destLat},${destLng}&travelmode=walking`, '_blank');
+      };
+
+      routingControl = L.Routing.control({
+        waypoints: [
+          L.latLng(userLatLng[0], userLatLng[1]),
+          L.latLng(destLat, destLng)
+        ],
+        router: L.Routing.osrmv1({
+          serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1',
+          profile: 'foot'
+        }),
+        lineOptions: {
+          styles: [
+            { color: '#2563eb', opacity: 0.9, weight: 6 }
+          ]
+        },
+        addWaypoints: false,
+        draggableWaypoints: false,
+        fitSelectedRoutes: true,
+        show: false,
+        createMarker: function() { return null; }
+      }).addTo(map);
+
+      routingControl.on('routesfound', function(e) {
+        const routes = e.routes;
+        const summary = routes[0].summary;
+        const meters = Math.round(summary.totalDistance);
+        const minutes = Math.max(1, Math.round(summary.totalTime / 60));
+
+        document.getElementById('nav-distance').innerText = `${meters} 公尺`;
+        document.getElementById('nav-time').innerText = `(步行約 ${minutes} 分鐘)`;
+        
+        if (routes[0].instructions && routes[0].instructions.length > 0) {
+          const firstStep = routes[0].instructions[0].text;
+          document.getElementById('nav-step').innerText = firstStep || "沿著步道前進";
+        }
+      });
+
+      routingControl.on('routingerror', function() {
+        const directDist = Math.round(map.distance(userLatLng, [destLat, destLng]));
+        const directMin = Math.max(1, Math.round(directDist / 70));
+        document.getElementById('nav-distance').innerText = `約 ${directDist} 公尺 (直線)`;
+        document.getElementById('nav-time').innerText = `(步程約 ${directMin} 分鐘)`;
+        document.getElementById('nav-step').innerText = "請參考 Google Maps 路線";
+      });
+    }
+
+    function cancelNavigation() {
+      if (routingControl) {
+        map.removeControl(routingControl);
+        routingControl = null;
+      }
+      const navBanner = document.getElementById('nav-banner');
+      navBanner.classList.add('hidden');
+      navBanner.classList.remove('flex');
+    }
+
+    // 頁面載入觸發定位與初始化
+    window.addEventListener('DOMContentLoaded', () => {
+      startAutoLocationTracking();
+    });
+  </script>
+</body>
+</html>
